@@ -1,0 +1,4 @@
+{
+  "Token": "YOUR_TELEGRAM_BOT_TOKEN",
+  "AdminPasswords": ["password1", "password2"]
+}
