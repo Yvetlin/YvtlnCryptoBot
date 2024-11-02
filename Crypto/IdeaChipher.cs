@@ -1,158 +1,202 @@
 using System;
-using System.Numerics;
+using System.Text;
 
-namespace YvetlinTgBot
+namespace TelegramEncryptionBot.Crypto
 {
     public class IdeaCipher
     {
-        private readonly (ushort, ushort, ushort, ushort, ushort, ushort)[] _keys;
+        private Idea _idea;
 
-        public IdeaCipher(BigInteger key)
+        public IdeaCipher(string charKey, bool encrypt)
         {
-            _keys = GenerateKeys(key);
+            // Инициализация объекта шифрования/дешифрования IDEA
+            _idea = new Idea(charKey, encrypt);
         }
 
-        private ushort MulMod(ushort a, ushort b)
+        public string Encrypt(string plainText)
         {
-            if (a == 0) a = 0x10000;
-            if (b == 0) b = 0x10000;
+            byte[] plainBytes = Encoding.UTF8.GetBytes(plainText);
+            byte[] encryptedBytes = Process(plainBytes);
+            return Convert.ToBase64String(encryptedBytes);
+        }
 
-            // Выполняем умножение с использованием длинного целого типа, чтобы избежать переполнения
-            uint result = (uint)a * b % 0x10001;
+        public string Decrypt(string encryptedText)
+        {
+            byte[] encryptedBytes = Convert.FromBase64String(encryptedText);
+            byte[] decryptedBytes = Process(encryptedBytes);
+            return Encoding.UTF8.GetString(decryptedBytes);
+        }
+
+        private byte[] Process(byte[] inputBytes)
+        {
+            // Рассчитываем количество блоков по 8 байт
+            int paddedLength = (inputBytes.Length + 7) / 8 * 8; // Округляем до ближайшего большего кратного 8
+            byte[] result = new byte[paddedLength];
+            byte[] paddedInput = new byte[paddedLength];
+
+            // Копируем исходные данные и дополняем нулями
+            Array.Copy(inputBytes, paddedInput, inputBytes.Length);
     
-            return (ushort)(result == 0x10000 ? 0 : result);
-        }
+            byte[] block = new byte[8];
 
-
-        private ushort AddMod(ushort a, ushort b)
-        {
-            return (ushort)((a + b) % 0x10000);
-        }
-
-        private ushort AddInv(ushort value)
-        {
-            return (ushort)(0x10000 - value);
-        }
-
-        private ushort MulInv(ushort value)
-        {
-            if (value == 0) return 0;
-            int a = 0x10001, b = value, x0 = 1, x1 = 0;
-            while (b > 0)
+            // Обрабатываем каждый 8-байтовый блок
+            for (int i = 0; i < paddedLength; i += 8)
             {
-                int q = a / b, r = a % b;
-                a = b;
-                b = r;
-                int x = x0 - q * x1;
-                x0 = x1;
-                x1 = x;
+                Array.Copy(paddedInput, i, block, 0, 8);
+                _idea.crypt(block);
+                Array.Copy(block, 0, result, i, 8);
             }
-            return (ushort)((x0 < 0) ? x0 + 0x10001 : x0);
+
+            return result;
         }
 
-        private (ushort, ushort, ushort, ushort, ushort, ushort)[] GenerateKeys(BigInteger key)
+    }
+
+    public class Idea
+    {
+        internal static int rounds = 8;
+        internal int[] subKey;
+
+        public Idea(string charKey, bool encrypt)
         {
-            var subKeys = new ushort[52];
-            for (int i = 0; i < 52; i++)
+            byte[] key = generateUserKeyFromCharKey(charKey);
+            int[] tempSubKey = expandUserKey(key);
+            subKey = encrypt ? tempSubKey : invertSubKey(tempSubKey);
+        }
+
+        public void crypt(byte[] data)
+        {
+            crypt(data, 0);
+        }
+
+        public void crypt(byte[] data, int dataPos)
+        {
+            int x0 = ((data[dataPos + 0] & 0xFF) << 8) | (data[dataPos + 1] & 0xFF);
+            int x1 = ((data[dataPos + 2] & 0xFF) << 8) | (data[dataPos + 3] & 0xFF);
+            int x2 = ((data[dataPos + 4] & 0xFF) << 8) | (data[dataPos + 5] & 0xFF);
+            int x3 = ((data[dataPos + 6] & 0xFF) << 8) | (data[dataPos + 7] & 0xFF);
+
+            int p = 0;
+            for (int round = 0; round < rounds; round++)
             {
-                subKeys[i] = (ushort)((key >> (112 - (i % 8) * 16)) & 0xFFFF);
-                if (i % 8 == 7)
+                int y0 = mul(x0, subKey[p++]);
+                int y1 = add(x1, subKey[p++]);
+                int y2 = add(x2, subKey[p++]);
+                int y3 = mul(x3, subKey[p++]);
+
+                int t0 = mul(y0 ^ y2, subKey[p++]);
+                int t1 = add(y1 ^ y3, t0);
+                int t2 = mul(t1, subKey[p++]);
+                int t3 = add(t0, t2);
+
+                x0 = y0 ^ t2;
+                x1 = y2 ^ t2;
+                x2 = y1 ^ t3;
+                x3 = y3 ^ t3;
+            }
+
+            int r0 = mul(x0, subKey[p++]);
+            int r1 = add(x2, subKey[p++]);
+            int r2 = add(x1, subKey[p++]);
+            int r3 = mul(x3, subKey[p++]);
+
+            data[dataPos + 0] = (byte)(r0 >> 8);
+            data[dataPos + 1] = (byte)r0;
+            data[dataPos + 2] = (byte)(r1 >> 8);
+            data[dataPos + 3] = (byte)r1;
+            data[dataPos + 4] = (byte)(r2 >> 8);
+            data[dataPos + 5] = (byte)r2;
+            data[dataPos + 6] = (byte)(r3 >> 8);
+            data[dataPos + 7] = (byte)r3;
+        }
+
+        private static int[] expandUserKey(byte[] userKey)
+        {
+            if (userKey.Length != 16)
+                throw new ArgumentException("Key length must be 128 bits", nameof(userKey));
+
+            int[] key = new int[rounds * 6 + 4];
+            for (int i = 0; i < userKey.Length / 2; i++)
+                key[i] = ((userKey[2 * i] & 0xFF) << 8) | (userKey[2 * i + 1] & 0xFF);
+
+            for (int i = userKey.Length / 2; i < key.Length; i++)
+                key[i] = ((key[(i + 1) % 8 != 0 ? i - 7 : i - 15] << 9) | (key[(i + 2) % 8 < 2 ? i - 14 : i - 6] >> 7)) & 0xFFFF;
+
+            return key;
+        }
+
+        private static int[] invertSubKey(int[] key)
+        {
+            int[] invKey = new int[key.Length];
+            int p = 0;
+            int i = rounds * 6;
+
+            invKey[i + 0] = mulInv(key[p++]);
+            invKey[i + 1] = addInv(key[p++]);
+            invKey[i + 2] = addInv(key[p++]);
+            invKey[i + 3] = mulInv(key[p++]);
+
+            for (int r = rounds - 1; r >= 0; r--)
+            {
+                i = r * 6;
+                int m = r > 0 ? 2 : 1;
+                int n = r > 0 ? 1 : 2;
+                invKey[i + 4] = key[p++];
+                invKey[i + 5] = key[p++];
+                invKey[i + 0] = mulInv(key[p++]);
+                invKey[i + m] = addInv(key[p++]);
+                invKey[i + n] = addInv(key[p++]);
+                invKey[i + 3] = mulInv(key[p++]);
+            }
+
+            return invKey;
+        }
+
+        private static int add(int a, int b) => (a + b) & 0xFFFF;
+
+        private static int mul(int a, int b)
+        {
+            long r = (long)a * b;
+            return r != 0 ? (int)(r % 0x10001) & 0xFFFF : (1 - a - b) & 0xFFFF;
+        }
+
+        private static int addInv(int x) => (0x10000 - x) & 0xFFFF;
+
+        private static int mulInv(int x)
+        {
+            if (x <= 1) return x;
+            int y = 0x10001, t0 = 1, t1 = 0;
+            while (true)
+            {
+                t1 += y / x * t0; y %= x;
+                if (y == 1) return 0x10001 - t1;
+                t0 += x / y * t1; x %= y;
+                if (x == 1) return t0;
+            }
+        }
+
+        private static byte[] generateUserKeyFromCharKey(string charKey)
+        {
+            int nofChar = 0x7E - 0x21 + 1;
+            int[] a = new int[8];
+            foreach (char c in charKey)
+            {
+                int code = c;
+                for (int i = a.Length - 1; i >= 0; i--)
                 {
-                    key = (key << 25) | (key >> 103);
+                    code += a[i] * nofChar;
+                    a[i] = code & 0xFFFF;
+                    code >>= 16;
                 }
             }
 
-            var keys = new (ushort, ushort, ushort, ushort, ushort, ushort)[9];
-            for (int i = 0; i < 9; i++)
-            {
-                keys[i] = (
-                    subKeys[6 * i],
-                    subKeys[6 * i + 1],
-                    subKeys[6 * i + 2],
-                    subKeys[6 * i + 3],
-                    subKeys[6 * i + 4],
-                    subKeys[6 * i + 5]
-                );
-            }
-            return keys;
-        }
-
-        public ulong Encrypt(ulong plainText)
-        {
-            ushort p1 = (ushort)(plainText >> 48);
-            ushort p2 = (ushort)(plainText >> 32);
-            ushort p3 = (ushort)(plainText >> 16);
-            ushort p4 = (ushort)plainText;
-
+            byte[] key = new byte[16];
             for (int i = 0; i < 8; i++)
             {
-                var (k1, k2, k3, k4, k5, k6) = _keys[i];
-
-                p1 = MulMod(p1, k1);
-                p2 = AddMod(p2, k2);
-                p3 = AddMod(p3, k3);
-                p4 = MulMod(p4, k4);
-
-                ushort x1 = (ushort)(p1 ^ p3);
-                ushort t0 = MulMod(k5, x1);
-                ushort x2 = (ushort)(p2 ^ p4);
-                ushort x = AddMod(t0, x2);
-                ushort t1 = MulMod(k6, x);
-                ushort t2 = AddMod(t0, t1);
-
-                p1 ^= t1;
-                p4 ^= t2;
-                ushort temp = p2;
-                p2 = (ushort)(p3 ^ t1);
-                p3 = (ushort)(temp ^ t2);
+                key[i * 2] = (byte)(a[i] >> 8);
+                key[i * 2 + 1] = (byte)a[i];
             }
-
-            var (finalK1, finalK2, finalK3, finalK4, _, _) = _keys[8];
-            p1 = MulMod(p1, finalK1);
-            p2 = AddMod(p3, finalK2);
-            p3 = AddMod(p2, finalK3);
-            p4 = MulMod(p4, finalK4);
-
-            return ((ulong)p1 << 48) | ((ulong)p2 << 32) | ((ulong)p3 << 16) | p4;
-        }
-
-        public ulong Decrypt(ulong cipherText)
-        {
-            ushort p1 = (ushort)(cipherText >> 48);
-            ushort p2 = (ushort)(cipherText >> 32);
-            ushort p3 = (ushort)(cipherText >> 16);
-            ushort p4 = (ushort)cipherText;
-
-            for (int i = 8; i > 0; i--)
-            {
-                var (k1, k2, k3, k4, k5, k6) = _keys[i];
-
-                ushort invK1 = MulInv(k1);
-                ushort invK4 = MulInv(k4);
-                ushort invK2 = AddInv(k2);
-                ushort invK3 = AddInv(k3);
-
-                ushort x1 = (ushort)(p1 ^ p3);
-                ushort t0 = MulMod(k5, x1);
-                ushort x2 = (ushort)(p2 ^ p4);
-                ushort x = AddMod(t0, x2);
-                ushort t1 = MulMod(k6, x);
-                ushort t2 = AddMod(t0, t1);
-
-                p1 ^= t1;
-                p4 ^= t2;
-                ushort temp = p2;
-                p2 = (ushort)(p3 ^ t1);
-                p3 = (ushort)(temp ^ t2);
-            }
-
-            var (finalK1, finalK2, finalK3, finalK4, _, _) = _keys[0];
-            p1 = MulMod(p1, MulInv(finalK1));
-            p2 = AddMod(p3, AddInv(finalK2));
-            p3 = AddMod(p2, AddInv(finalK3));
-            p4 = MulMod(p4, MulInv(finalK4));
-
-            return ((ulong)p1 << 48) | ((ulong)p2 << 32) | ((ulong)p3 << 16) | p4;
+            return key;
         }
     }
 }
