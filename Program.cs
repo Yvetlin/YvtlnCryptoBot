@@ -12,42 +12,64 @@ namespace TelegramEncryptionBot
 {
     class Program
     {
-        public static TelegramBotClient? BotClient;
+        public static TelegramBotClient BotClient;
 
         static async Task Main(string[] args)
         {
-            // Загрузка токена из конфигурации
-            var config = JsonSerializer.Deserialize<BotConfig>(System.IO.File.ReadAllText(@"C:\Users\yvetlin\Documents\GitHub\YvtlnCryptoBot\config.json"));
-            BotClient = new TelegramBotClient(config!.BotToken);
-
-            var cts = new CancellationTokenSource();
-            var receiverOptions = new ReceiverOptions
+            try
             {
-                AllowedUpdates = new[] { UpdateType.Message, UpdateType.CallbackQuery } // Указание типов обновлений
-            };
+                // Загрузка токена из конфигурации
+                var configContent = System.IO.File.ReadAllText(@"C:\Users\yvetlin\Documents\GitHub\YvtlnCryptoBot\config.json");
+                var config = JsonSerializer.Deserialize<BotConfig>(configContent);
+                
+                if (config == null || string.IsNullOrWhiteSpace(config.BotToken))
+                {
+                    Console.WriteLine("Ошибка: токен бота не найден в конфигурации.");
+                    return;
+                }
 
-            BotClient.StartReceiving(
-                updateHandler: HandleUpdateAsync,
-                errorHandler: HandleErrorAsync, // Изменение pollingErrorHandler на errorHandler
-                receiverOptions: receiverOptions,
-                cancellationToken: cts.Token
-            );
+                BotClient = new TelegramBotClient(config.BotToken);
 
-            var botInfo = await BotClient.GetMeAsync();
-            Console.WriteLine($"Бот {botInfo.Username} запущен.");
-            Console.ReadLine();
-            cts.Cancel();
+                var cts = new CancellationTokenSource();
+                var receiverOptions = new ReceiverOptions
+                {
+                    AllowedUpdates = new[] { UpdateType.Message, UpdateType.CallbackQuery } // Указание типов обновлений
+                };
+
+                BotClient.StartReceiving(
+                    updateHandler: HandleUpdateAsync,
+                    errorHandler: HandleErrorAsync,
+                    receiverOptions: receiverOptions,
+                    cancellationToken: cts.Token
+                );
+
+                var botInfo = await BotClient.GetMeAsync();
+                Console.WriteLine($"Бот {botInfo.Username} запущен.");
+                Console.ReadLine();
+                cts.Cancel();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при запуске бота: {ex.Message}");
+            }
         }
 
         private static async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
-            if (update.Type == UpdateType.Message && update.Message != null)
+            try
             {
-                await CommandsHandler.HandleMessageAsync(botClient, update.Message);
+                if (update.Type == UpdateType.Message && update.Message != null)
+                {
+                    await CommandsHandler.HandleMessageAsync(botClient, update.Message, cancellationToken);
+                }
+                else if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery != null)
+                {
+                    await CommandsHandler.HandleCallbackQueryAsync(botClient, update.CallbackQuery, cancellationToken);
+                }
             }
-            else if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery != null)
+            catch (Exception ex)
             {
-                await CommandsHandler.HandleCallbackQueryAsync(botClient, update.CallbackQuery);
+                Console.WriteLine($"Ошибка при обработке обновления: {ex.Message}");
             }
         }
 
@@ -60,6 +82,6 @@ namespace TelegramEncryptionBot
 
     public class BotConfig
     {
-        public string BotToken { get; set; }
+        public string BotToken { get; set; } = string.Empty; // Установка значения по умолчанию
     }
 }

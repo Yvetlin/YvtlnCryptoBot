@@ -1,143 +1,76 @@
+using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Telegram.Bot;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using TelegramEncryptionBot.Database;
 using TelegramEncryptionBot.Crypto;
 
 namespace TelegramEncryptionBot.Commands
 {
     public static class CommandsHandler
     {
-        private static string encryptionKey = "default";
-        private static bool isEncryptionMode = true;
-        private static bool isAwaitingCustomKey = false; // Новая переменная для отслеживания состояния ожидания ключа
-
-        public static async Task HandleMessageAsync(ITelegramBotClient botClient, Message? message)
+        public static async Task HandleMessageAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
         {
-            if (message?.Text == null)
-                return;
+            var text = message.Text;
+            var chatId = message.Chat.Id;
 
-            // Главное меню с кнопками шифрования и дешифрования
-            if (message.Text == "/start" || message.Text == "Главное меню")
+            // Основной сценарий регистрации
+            if (text == "/start")
             {
-                isAwaitingCustomKey = false; // Сбрасываем состояние ожидания ключа
-                var replyKeyboard = new InlineKeyboardMarkup(new[]
+                await botClient.SendTextMessageAsync(chatId, "👋 Привет! Я бот шифровщик 🔒. Для начала нужно зарегистрироваться.\nПожалуйста, укажи свой Telegram тег (например, @username):", cancellationToken: cancellationToken);
+            }
+            else if (text.StartsWith("@") && !Database.UserExists(text))
+            {
+                // Сохраняем Telegram тег
+                var tgTag = text;
+                Database.AddChatData(tgTag, "", "");  // Сохраняем тег, оставляем ключ и сообщение пустыми
+                await botClient.SendTextMessageAsync(chatId, "🔑 Теперь нужно задать себе ключ.", cancellationToken: cancellationToken);
+
+                // Отправляем кнопки для выбора ключа
+                var replyMarkup = new InlineKeyboardMarkup(new[]
                 {
                     new[]
                     {
-                        InlineKeyboardButton.WithCallbackData("🔒 Шифровка", "encrypt"),
-                        InlineKeyboardButton.WithCallbackData("🔓 Дешифровка", "decrypt")
+                        InlineKeyboardButton.WithCallbackData("🖊️ Ввести собственный ключ", "custom_key"),
+                        InlineKeyboardButton.WithCallbackData("🎲 Использовать рандомный", "random_key")
                     }
                 });
-
-                await botClient.SendTextMessageAsync(
-                    chatId: message.Chat.Id,
-                    text: "Добрый день! Я бот, запрограммированный на шифровку и дешифровку сообщений!",
-                    replyMarkup: replyKeyboard
-                );
+                await botClient.SendTextMessageAsync(chatId, "Выберите способ установки ключа:", replyMarkup: replyMarkup, cancellationToken: cancellationToken);
             }
-            // Обработка выбора режима шифрования/дешифрования
-            else if (message.Text == "🔒 Шифровка" || message.Text == "🔓 Дешифровка")
+            else if (Database.UserExists(text))
             {
-                isEncryptionMode = message.Text == "🔒 Шифровка";
-                isAwaitingCustomKey = false; // Сбрасываем состояние ожидания ключа
-
-                var replyKeyboard = new InlineKeyboardMarkup(new[]
-                {
-                    new[]
-                    {
-                        InlineKeyboardButton.WithCallbackData("Использовать стандартный ключ", "default_key"),
-                        InlineKeyboardButton.WithCallbackData("Назначить свой ключ", "custom_key")
-                    },
-                    new[]
-                    {
-                        InlineKeyboardButton.WithCallbackData("🏠 Главное меню", "main_menu")
-                    }
-                });
-
-                await botClient.SendTextMessageAsync(
-                    chatId: message.Chat.Id,
-                    text: "Выберите ключ для использования или введите свой в формате hex.",
-                    replyMarkup: replyKeyboard
-                );
-            }
-            // Обработка пользовательского ключа
-            else if (isAwaitingCustomKey)
-            {
-                encryptionKey = message.Text;
-                isAwaitingCustomKey = false; // Сбрасываем состояние ожидания ключа
-
-                await botClient.SendTextMessageAsync(
-                    chatId: message.Chat.Id,
-                    text: "Ключ успешно сохранен. Теперь введите сообщение, которое нужно зашифровать или расшифровать."
-                );
-            }
-            // Шифровка или дешифровка сообщения
-            else
-            {
-                try
-                {
-                    var cipher = new IdeaCipher(encryptionKey, isEncryptionMode);
-                    string resultMessage = isEncryptionMode ? cipher.Encrypt(message.Text) : cipher.Decrypt(message.Text);
-
-                    var replyKeyboard = new InlineKeyboardMarkup(new[]
-                    {
-                        new[]
-                        {
-                            InlineKeyboardButton.WithCallbackData("🏠 Главное меню", "main_menu")
-                        }
-                    });
-
-                    string action = isEncryptionMode ? "Зашифрованное" : "Расшифрованное";
-                    await botClient.SendTextMessageAsync(
-                        chatId: message.Chat.Id,
-                        text: $"{action} сообщение: {resultMessage}",
-                        replyMarkup: replyKeyboard
-                    );
-                }
-                catch (Exception ex)
-                {
-                    await botClient.SendTextMessageAsync(
-                        chatId: message.Chat.Id,
-                        text: $"Ошибка: {ex.Message}",
-                        replyMarkup: new InlineKeyboardMarkup(InlineKeyboardButton.WithCallbackData("🏠 Главное меню", "main_menu"))
-                    );
-                }
+                await botClient.SendTextMessageAsync(chatId, "❌ Этот Telegram тег уже зарегистрирован. Пожалуйста, попробуйте другой.", cancellationToken: cancellationToken);
             }
         }
 
-        public static async Task HandleCallbackQueryAsync(ITelegramBotClient botClient, CallbackQuery callbackQuery)
+        public static async Task HandleCallbackQueryAsync(ITelegramBotClient botClient, CallbackQuery callbackQuery, CancellationToken cancellationToken)
         {
-            if (callbackQuery.Message == null)
-                return;
+            var chatId = callbackQuery.Message.Chat.Id;
+            var tgTag = callbackQuery.From.Username;
 
-            switch (callbackQuery.Data)
+            if (callbackQuery.Data == "custom_key")
             {
-                case "encrypt":
-                    isEncryptionMode = true;
-                    isAwaitingCustomKey = false;
-                    await HandleMessageAsync(botClient, new Message { Chat = callbackQuery.Message.Chat, Text = "🔒 Шифровка" });
-                    break;
-                case "decrypt":
-                    isEncryptionMode = false;
-                    isAwaitingCustomKey = false;
-                    await HandleMessageAsync(botClient, new Message { Chat = callbackQuery.Message.Chat, Text = "🔓 Дешифровка" });
-                    break;
-                case "default_key":
-                    encryptionKey = "0A1B2C3D4E5F67890A1B2C3D4E5F6789";
-                    isAwaitingCustomKey = false;
-                    await botClient.SendTextMessageAsync(callbackQuery.Message.Chat.Id, "Используется стандартный ключ. Введите сообщение для обработки.");
-                    break;
-                case "custom_key":
-                    isAwaitingCustomKey = true; // Включаем режим ожидания пользовательского ключа
-                    await botClient.SendTextMessageAsync(callbackQuery.Message.Chat.Id, "Введите ваш ключ в формате hex.");
-                    break;
-                case "main_menu":
-                    isAwaitingCustomKey = false;
-                    await HandleMessageAsync(botClient, new Message { Chat = callbackQuery.Message.Chat, Text = "Главное меню" });
-                    break;
+                await botClient.SendTextMessageAsync(chatId, "🖊️ Введите ваш собственный ключ:", cancellationToken: cancellationToken);
+                Database.SetUserStage(tgTag, "waiting_for_custom_key");
             }
-            await botClient.AnswerCallbackQueryAsync(callbackQuery.Id);
+            else if (callbackQuery.Data == "random_key")
+            {
+                var randomKey = Database.GenerateRandomHexKey();
+                Database.SetDefaultKey(tgTag, randomKey);
+                await botClient.SendTextMessageAsync(chatId, $"🎉 Ваш ключ установлен! Теперь можно начинать шифрование и дешифрование.", cancellationToken: cancellationToken);
+            }
+        }
+
+        public static async Task HandleCustomKeyMessageAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        {
+            var tgTag = message.From.Username;
+            var customKey = message.Text;
+            Database.SetDefaultKey(tgTag, customKey);
+            Database.SetUserStage(tgTag, "registered");
+            await botClient.SendTextMessageAsync(message.Chat.Id, "🔐 Ваш собственный ключ сохранен! Теперь можно начинать шифрование и дешифрование.", cancellationToken: cancellationToken);
         }
     }
 }
