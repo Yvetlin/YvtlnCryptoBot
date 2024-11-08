@@ -17,32 +17,31 @@ namespace TelegramEncryptionBot.Commands
             var text = message.Text;
             var chatId = message.Chat.Id;
 
-            // Основной сценарий регистрации
+            // Обработка команды /start
             if (text == "/start")
             {
-                await botClient.SendTextMessageAsync(chatId, "👋 Привет! Я бот шифровщик 🔒. Для начала нужно зарегистрироваться.\nПожалуйста, укажи свой Telegram тег (например, @username):", cancellationToken: cancellationToken);
-            }
-            else if (text.StartsWith("@") && !Database.UserExists(text))
-            {
-                // Сохраняем Telegram тег
-                var tgTag = text;
-                Database.AddChatData(tgTag, "", "");  // Сохраняем тег, оставляем ключ и сообщение пустыми
-                await botClient.SendTextMessageAsync(chatId, "🔑 Теперь нужно задать себе ключ.", cancellationToken: cancellationToken);
-
-                // Отправляем кнопки для выбора ключа
-                var replyMarkup = new InlineKeyboardMarkup(new[]
+                var tgTag = message.From.Username;
+                if (!DatabaseManager.UserExists(tgTag))
                 {
-                    new[]
-                    {
-                        InlineKeyboardButton.WithCallbackData("🖊️ Ввести собственный ключ", "custom_key"),
-                        InlineKeyboardButton.WithCallbackData("🎲 Использовать рандомный", "random_key")
-                    }
-                });
-                await botClient.SendTextMessageAsync(chatId, "Выберите способ установки ключа:", replyMarkup: replyMarkup, cancellationToken: cancellationToken);
+                    DatabaseManager.AddChatData(tgTag, "", "");
+                    await botClient.SendTextMessageAsync(chatId, "Добро пожаловать! Пожалуйста, зарегистрируйтесь, указав свой Telegram тег (например, @username):", cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    await botClient.SendTextMessageAsync(chatId, "👋 Добро пожаловать обратно! Вот главное меню:", cancellationToken: cancellationToken);
+                    await SendMainMenu(botClient, chatId, cancellationToken);
+                }
             }
-            else if (Database.UserExists(text))
+            else if (DatabaseManager.GetUserStage(text) == "waiting_for_custom_key")
             {
-                await botClient.SendTextMessageAsync(chatId, "❌ Этот Telegram тег уже зарегистрирован. Пожалуйста, попробуйте другой.", cancellationToken: cancellationToken);
+                // Сохраняем пользовательский ключ
+                DatabaseManager.SetDefaultKey(text, text);
+                await botClient.SendTextMessageAsync(chatId, "🔐 Ваш собственный ключ установлен!", cancellationToken: cancellationToken);
+                await SendMainMenu(botClient, chatId, cancellationToken);
+            }
+            else
+            {
+                await botClient.SendTextMessageAsync(chatId, "Неизвестная команда. Пожалуйста, выберите действие в меню.", cancellationToken: cancellationToken);
             }
         }
 
@@ -51,26 +50,65 @@ namespace TelegramEncryptionBot.Commands
             var chatId = callbackQuery.Message.Chat.Id;
             var tgTag = callbackQuery.From.Username;
 
-            if (callbackQuery.Data == "custom_key")
+            switch (callbackQuery.Data)
             {
-                await botClient.SendTextMessageAsync(chatId, "🖊️ Введите ваш собственный ключ:", cancellationToken: cancellationToken);
-                Database.SetUserStage(tgTag, "waiting_for_custom_key");
-            }
-            else if (callbackQuery.Data == "random_key")
-            {
-                var randomKey = Database.GenerateRandomHexKey();
-                Database.SetDefaultKey(tgTag, randomKey);
-                await botClient.SendTextMessageAsync(chatId, $"🎉 Ваш ключ установлен! Теперь можно начинать шифрование и дешифрование.", cancellationToken: cancellationToken);
+                case "change_key":
+                    // Предоставляем выбор между случайным ключом и собственным
+                    var replyMarkup = new InlineKeyboardMarkup(new[]
+                    {
+                        new[]
+                        {
+                            InlineKeyboardButton.WithCallbackData("🖊️ Ввести собственный ключ", "set_custom_key"),
+                            InlineKeyboardButton.WithCallbackData("🎲 Использовать случайный ключ", "set_random_key")
+                        }
+                    });
+                    await botClient.SendTextMessageAsync(chatId, "Выберите способ установки ключа:", replyMarkup: replyMarkup, cancellationToken: cancellationToken);
+                    break;
+
+                case "set_custom_key":
+                    // Установка пользовательского ключа
+                    await botClient.SendTextMessageAsync(chatId, "Введите ваш собственный ключ:", cancellationToken: cancellationToken);
+                    DatabaseManager.SetUserStage(tgTag, "waiting_for_custom_key");
+                    break;
+
+                case "set_random_key":
+                    // Установка случайного ключа
+                    var randomKey = DatabaseManager.GenerateRandomHexKey();
+                    DatabaseManager.SetDefaultKey(tgTag, randomKey);
+                    await botClient.SendTextMessageAsync(chatId, $"🎉 Ваш новый ключ установлен: {randomKey}", cancellationToken: cancellationToken);
+                    await SendMainMenu(botClient, chatId, cancellationToken);
+                    break;
+
+                case "encrypt":
+                    await botClient.SendTextMessageAsync(chatId, "🔒 Введите текст для шифрования:", cancellationToken: cancellationToken);
+                    DatabaseManager.SetUserStage(tgTag, "waiting_for_encryption_text");
+                    break;
+
+                case "decrypt":
+                    await botClient.SendTextMessageAsync(chatId, "🔓 Введите текст для дешифрования:", cancellationToken: cancellationToken);
+                    DatabaseManager.SetUserStage(tgTag, "waiting_for_decryption_text");
+                    break;
+
+                default:
+                    await botClient.SendTextMessageAsync(chatId, "Неизвестная команда. Пожалуйста, выберите действие в меню.", cancellationToken: cancellationToken);
+                    await SendMainMenu(botClient, chatId, cancellationToken);
+                    break;
             }
         }
 
-        public static async Task HandleCustomKeyMessageAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        public static async Task SendMainMenu(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
         {
-            var tgTag = message.From.Username;
-            var customKey = message.Text;
-            Database.SetDefaultKey(tgTag, customKey);
-            Database.SetUserStage(tgTag, "registered");
-            await botClient.SendTextMessageAsync(message.Chat.Id, "🔐 Ваш собственный ключ сохранен! Теперь можно начинать шифрование и дешифрование.", cancellationToken: cancellationToken);
+            var replyMarkup = new InlineKeyboardMarkup(new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("Изменить дефолтный ключ", "change_key"),
+                    InlineKeyboardButton.WithCallbackData("Шифрование", "encrypt"),
+                    InlineKeyboardButton.WithCallbackData("Дешифрование", "decrypt")
+                }
+            });
+
+            await botClient.SendTextMessageAsync(chatId, "Главное меню\nВыберите следующие действия:", replyMarkup: replyMarkup, cancellationToken: cancellationToken);
         }
     }
 }

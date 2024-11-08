@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO; // Явно используем File из System.IO
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,16 +13,26 @@ namespace TelegramEncryptionBot
 {
     class Program
     {
-        public static TelegramBotClient BotClient;
+        public static TelegramBotClient BotClient = null!; // Установка начального значения null! для устранения предупреждения
 
         static async Task Main(string[] args)
         {
             try
             {
-                // Загрузка токена из конфигурации
-                var configContent = System.IO.File.ReadAllText(@"C:\Users\yvetlin\Documents\GitHub\YvtlnCryptoBot\config.json");
-                var config = JsonSerializer.Deserialize<BotConfig>(configContent);
+                // Путь к конфигурационному файлу
+                string configPath = @"C:\Users\yvtln\RiderProjects\YvtlnCryptoBot\YvtlnCryptoBot\config.json";
+
                 
+                // Проверка наличия файла config.json
+                if (!System.IO.File.Exists(configPath)) // Указание System.IO.File
+                {
+                    Console.WriteLine($"Ошибка: файл конфигурации '{configPath}' не найден в рабочем каталоге '{Environment.CurrentDirectory}'.");
+                    return;
+                }
+
+                // Загрузка токена из конфигурации
+                var config = JsonSerializer.Deserialize<BotConfig>(System.IO.File.ReadAllText(configPath)); // Указание System.IO.File
+
                 if (config == null || string.IsNullOrWhiteSpace(config.BotToken))
                 {
                     Console.WriteLine("Ошибка: токен бота не найден в конфигурации.");
@@ -83,5 +94,7 @@ namespace TelegramEncryptionBot
     public class BotConfig
     {
         public string BotToken { get; set; } = string.Empty; // Установка значения по умолчанию
+        public string AdminPassword1 { get; set; } = string.Empty;
+        public string AdminPassword2 { get; set; } = string.Empty;
     }
 }

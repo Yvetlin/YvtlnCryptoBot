@@ -1,14 +1,12 @@
 using Npgsql;
 using System;
 using System.Linq;
-using TelegramEncryptionBot;
-
 
 namespace TelegramEncryptionBot.Database
 {
-    public static class Database
+    public static class DatabaseManager
     {
-        private static readonly string ConnectionString = "Host=localhost;Username=postgres;Password=ваш_пароль;Database=имя_вашей_базы";
+        private static readonly string ConnectionString = "Host=localhost;Username=postgres;Password=qwe123123;Database=ChatInfo";
 
         public static bool UserExists(string tgTag)
         {
@@ -109,5 +107,42 @@ namespace TelegramEncryptionBot.Database
                 Console.WriteLine($"Ошибка при установке ключа по умолчанию: {ex.Message}");
             }
         }
+        public static string GetDefaultKey(string tgTag)
+        {
+            try
+            {
+                using var conn = new NpgsqlConnection(ConnectionString);
+                conn.Open();
+
+                using var cmd = new NpgsqlCommand("SELECT default_key FROM chats WHERE tg_tag = @tgTag", conn);
+                cmd.Parameters.AddWithValue("tgTag", tgTag);
+                return cmd.ExecuteScalar() as string ?? string.Empty; // Возвращаем пустую строку, если ключ не найден
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при получении ключа по умолчанию: {ex.Message}");
+                return string.Empty;
+            }
+        }
+        public static string GetLastKey(string tgTag)
+        {
+            try
+            {
+                using var conn = new NpgsqlConnection(ConnectionString);
+                conn.Open();
+
+                using var cmd = new NpgsqlCommand("SELECT last_key FROM chats WHERE tg_tag = @tgTag", conn);
+                cmd.Parameters.AddWithValue("tgTag", tgTag);
+
+                var result = cmd.ExecuteScalar();
+                return result?.ToString() ?? string.Empty; // Возвращает last_key или пустую строку, если значение отсутствует
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при получении last_key: {ex.Message}");
+                return string.Empty;
+            }
+        }
+
     }
 }
