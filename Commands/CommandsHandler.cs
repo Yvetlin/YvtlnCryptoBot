@@ -32,16 +32,49 @@ namespace TelegramEncryptionBot.Commands
                     await SendMainMenu(botClient, chatId, cancellationToken);
                 }
             }
-            else if (DatabaseManager.GetUserStage(text) == "waiting_for_custom_key")
-            {
-                // Сохраняем пользовательский ключ
-                DatabaseManager.SetDefaultKey(text, text);
-                await botClient.SendTextMessageAsync(chatId, "🔐 Ваш собственный ключ установлен!", cancellationToken: cancellationToken);
-                await SendMainMenu(botClient, chatId, cancellationToken);
-            }
             else
             {
-                await botClient.SendTextMessageAsync(chatId, "Неизвестная команда. Пожалуйста, выберите действие в меню.", cancellationToken: cancellationToken);
+                var tgTag = message.From.Username;
+                var userStage = DatabaseManager.GetUserStage(tgTag);
+
+                switch (userStage)
+                {
+                    case "waiting_for_custom_key":
+                        // Сохраняем пользовательский ключ
+                        DatabaseManager.SetDefaultKey(tgTag, text);
+                        await botClient.SendTextMessageAsync(chatId, "🔐 Ваш собственный ключ установлен!", cancellationToken: cancellationToken);
+                        await SendMainMenu(botClient, chatId, cancellationToken);
+                        break;
+
+                    case "waiting_for_encryption_text":
+                        // Выполняем шифрование
+                        var encryptionKey = DatabaseManager.GetDefaultKey(tgTag);
+                        var cipher = new IdeaCipher(encryptionKey, true);
+                        var encryptedText = cipher.Encrypt(text);
+                        await botClient.SendTextMessageAsync(chatId, $"🔒 Зашифрованный текст: {encryptedText}", cancellationToken: cancellationToken);
+                        await SendMainMenu(botClient, chatId, cancellationToken);
+                        break;
+
+                    case "waiting_for_decryption_text":
+                        // Выполняем дешифрование
+                        encryptionKey = DatabaseManager.GetDefaultKey(tgTag);
+                        cipher = new IdeaCipher(encryptionKey, false);
+                        try
+                        {
+                            var decryptedText = cipher.Decrypt(text);
+                            await botClient.SendTextMessageAsync(chatId, $"🔓 Расшифрованный текст: {decryptedText}", cancellationToken: cancellationToken);
+                        }
+                        catch
+                        {
+                            await botClient.SendTextMessageAsync(chatId, "❌ Ошибка дешифрования. Проверьте входные данные.", cancellationToken: cancellationToken);
+                        }
+                        await SendMainMenu(botClient, chatId, cancellationToken);
+                        break;
+
+                    default:
+                        await botClient.SendTextMessageAsync(chatId, "Неизвестная команда. Пожалуйста, выберите действие в меню.", cancellationToken: cancellationToken);
+                        break;
+                }
             }
         }
 
